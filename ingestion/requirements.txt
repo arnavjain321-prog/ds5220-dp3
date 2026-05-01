@@ -1,0 +1,4 @@
+# Runtime dependencies packaged into the ingestion Lambda.
+# boto3 is provided by the Lambda runtime and excluded automatically by Chalice.
+# Plot rendering is delegated to the QuickChart public API (urllib in stdlib),
+# so no compiled numerical packages need to be bundled.

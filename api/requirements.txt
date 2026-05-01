@@ -1,0 +1,3 @@
+# No additional runtime dependencies needed for the API Lambda.
+# boto3 is provided by the Lambda runtime and excluded automatically by Chalice.
+# All standard library modules (datetime, decimal, os) are built in.
