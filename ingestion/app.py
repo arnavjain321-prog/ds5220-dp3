@@ -6,7 +6,6 @@ Stores timestamped records in DynamoDB and regenerates a price-history plot in S
 
 import json
 import os
-import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -167,18 +166,17 @@ def _regenerate_plot(table):
                 "yAxes": [
                     {
                         "scaleLabel": {"display": True, "labelString": "Price (USD)"},
-                        "ticks": {"callback": "function(v){return '$'+v.toLocaleString();}"},
                     }
                 ],
             },
         },
     }
 
-    body = urllib.parse.urlencode(
+    body = json.dumps(
         {
-            "chart": json.dumps(chart_config),
-            "width": "1000",
-            "height": "500",
+            "chart": chart_config,
+            "width": 1000,
+            "height": 500,
             "backgroundColor": "white",
             "format": "png",
         }
@@ -188,7 +186,7 @@ def _regenerate_plot(table):
         "https://quickchart.io/chart",
         data=body,
         method="POST",
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        headers={"Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
         png_bytes = resp.read()
@@ -198,7 +196,6 @@ def _regenerate_plot(table):
         Key="latest-btc.png",
         Body=png_bytes,
         ContentType="image/png",
-        ACL="public-read",
     )
     app.log.info(
         f"Plot uploaded: https://{S3_BUCKET}.s3.us-east-1.amazonaws.com/latest-btc.png"
