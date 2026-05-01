@@ -100,59 +100,74 @@ def ingest(event):
 # ---------------------------------------------------------------------------
 def _regenerate_plot(table):
     """
-    Query the last 48 hours of BTC prices, render a chart via QuickChart,
-    and upload the PNG to S3. Using a public chart API keeps the Lambda
-    package small (no matplotlib / numpy / compiled deps).
+    Query the last 48 hours of BTC, ETH, and SOL prices, render a multi-line
+    chart of percent change since the start of the window via QuickChart,
+    and upload the PNG to S3. Normalizing to % change lets all three coins
+    share a single y-axis despite very different absolute price scales.
     """
     start_time = (datetime.now(timezone.utc) - timedelta(hours=48)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
 
-    response = table.query(
-        KeyConditionExpression=(
-            Key("coin").eq("bitcoin") & Key("timestamp").gte(start_time)
-        ),
-        ScanIndexForward=True,
-    )
-    items = response.get("Items", [])
+    coin_series = {}
+    for coin in COINS:
+        resp = table.query(
+            KeyConditionExpression=(
+                Key("coin").eq(coin) & Key("timestamp").gte(start_time)
+            ),
+            ScanIndexForward=True,
+        )
+        coin_series[coin] = {
+            item["timestamp"]: float(item["price_usd"])
+            for item in resp.get("Items", [])
+        }
 
-    if len(items) < 2:
-        app.log.info("Not enough BTC data yet to generate a plot — skipping.")
+    # Intersect timestamps across all three coins so the series align on x
+    common_ts = sorted(
+        set.intersection(*(set(s.keys()) for s in coin_series.values()))
+    )
+
+    if len(common_ts) < 2:
+        app.log.info("Not enough overlapping data yet to generate a plot — skipping.")
         return
 
     labels = [
-        datetime.strptime(item["timestamp"], "%Y-%m-%dT%H:%M:%SZ").strftime(
-            "%m/%d %H:%M"
-        )
-        for item in items
+        datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").strftime("%m/%d %H:%M")
+        for ts in common_ts
     ]
-    prices = [float(item["price_usd"]) for item in items]
-    latest_price = prices[-1]
+
+    coin_meta = {
+        "bitcoin":  {"label": "BTC", "color": "#F7931A"},
+        "ethereum": {"label": "ETH", "color": "#627EEA"},
+        "solana":   {"label": "SOL", "color": "#9945FF"},
+    }
+
+    datasets = []
+    for coin in COINS:
+        prices = [coin_series[coin][ts] for ts in common_ts]
+        baseline = prices[0]
+        pct_change = [((p / baseline) - 1) * 100 for p in prices]
+        meta = coin_meta[coin]
+        datasets.append(
+            {
+                "label": meta["label"],
+                "data": pct_change,
+                "borderColor": meta["color"],
+                "backgroundColor": meta["color"],
+                "borderWidth": 2,
+                "fill": False,
+                "pointRadius": 0,
+                "tension": 0.2,
+            }
+        )
 
     chart_config = {
         "type": "line",
-        "data": {
-            "labels": labels,
-            "datasets": [
-                {
-                    "label": "BTC/USD",
-                    "data": prices,
-                    "borderColor": "#F7931A",
-                    "backgroundColor": "rgba(247, 147, 26, 0.12)",
-                    "borderWidth": 2,
-                    "fill": True,
-                    "pointRadius": 0,
-                    "tension": 0.2,
-                }
-            ],
-        },
+        "data": {"labels": labels, "datasets": datasets},
         "options": {
             "title": {
                 "display": True,
-                "text": (
-                    f"Bitcoin (BTC) Price — Last 48 Hours  (latest "
-                    f"${latest_price:,.2f})"
-                ),
+                "text": "BTC / ETH / SOL — % Change Over Last 48 Hours",
                 "fontSize": 16,
             },
             "legend": {"position": "top"},
@@ -165,7 +180,10 @@ def _regenerate_plot(table):
                 ],
                 "yAxes": [
                     {
-                        "scaleLabel": {"display": True, "labelString": "Price (USD)"},
+                        "scaleLabel": {
+                            "display": True,
+                            "labelString": "% change from start of window",
+                        },
                     }
                 ],
             },

@@ -43,6 +43,8 @@ Lambda (arnavwx-ingestion)
 
 **Plot strategy:** "render on write" — the ingestion Lambda regenerates the chart by POSTing a Chart.js config to the public [QuickChart API](https://quickchart.io) and uploads the returned PNG to S3 after every collection cycle. The API `/plot` resource returns the stable S3 URL without any compute at read time.
 
+The chart is a **multi-line plot of BTC, ETH, and SOL over the last 48 hours**, normalized to **percent change from the start of the window** so all three series share a single y-axis despite very different absolute price scales (≈$60k vs ≈$2k vs ≈$80). BTC is rendered in orange (`#F7931A`), ETH in blue (`#627EEA`), and SOL in purple (`#9945FF`). Timestamps are intersected across the three coins so the series stay aligned even if a single ingest cycle dropped one of them.
+
 ### Part 2 — Integration API
 
 ```
@@ -54,7 +56,7 @@ API Gateway (arnavwx-api)
       ├── GET /          → { about, resources }
       ├── GET /current   → latest BTC / ETH / SOL prices
       ├── GET /trend     → 24h price movement for BTC
-      └── GET /plot      → S3 URL of latest BTC chart
+      └── GET /plot      → S3 URL of latest BTC/ETH/SOL chart
             │
             ▼
       Lambda (arnavwx-api) ──► DynamoDB Query ──► arnavwx-prices
@@ -137,7 +139,7 @@ cd api && chalice deploy --stage dev && cd ..
 | `/` | GET | `{ "about": "...", "resources": ["current", "trend", "plot"] }` |
 | `/current` | GET | Latest BTC / ETH / SOL prices as a formatted string |
 | `/trend` | GET | BTC 24h % change, dollar delta, range (high/low) |
-| `/plot` | GET | S3 URL of the BTC price chart (last 48 hours) |
+| `/plot` | GET | S3 URL of the BTC/ETH/SOL % change chart (last 48 hours) |
 
 ### Example responses
 
