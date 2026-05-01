@@ -43,7 +43,9 @@ Lambda (arnavwx-ingestion)
 
 **Plot strategy:** "render on write" — the ingestion Lambda regenerates the chart by POSTing a Chart.js config to the public [QuickChart API](https://quickchart.io) and uploads the returned PNG to S3 after every collection cycle. The API `/plot` resource returns the stable S3 URL without any compute at read time.
 
-The chart is a **multi-line plot of BTC, ETH, and SOL over the last 48 hours**, normalized to **percent change from the start of the window** so all three series share a single y-axis despite very different absolute price scales (≈$60k vs ≈$2k vs ≈$80). BTC is rendered in orange (`#F7931A`), ETH in blue (`#627EEA`), and SOL in purple (`#9945FF`). Timestamps are intersected across the three coins so the series stay aligned even if a single ingest cycle dropped one of them.
+The chart is a **3-panel figure** with one subplot per coin stacked vertically — **BTC, ETH, and SOL raw USD prices over the last 48 hours**, each on its own y-axis so the very different absolute price scales (≈$60k vs ≈$2k vs ≈$80) are all readable. Each line uses the coin's brand color with dot markers on every data point: BTC orange (`#F7931A`), ETH blue (`#627EEA`), SOL purple (`#9945FF`). Each subplot's title shows the coin and its latest price. Only the bottom panel renders the time axis labels — the panels share the x-axis. Timestamps are intersected across the three coins so all panels line up on the same x positions.
+
+QuickChart only renders one Chart.js chart per request, so the Lambda fires three requests (one per coin) and stitches the resulting PNGs vertically with [pypng](https://pypi.org/project/pypng/), a pure-Python PNG library — no compiled deps to bundle.
 
 ### Part 2 — Integration API
 
@@ -139,7 +141,7 @@ cd api && chalice deploy --stage dev && cd ..
 | `/` | GET | `{ "about": "...", "resources": ["current", "trend", "plot"] }` |
 | `/current` | GET | Latest BTC / ETH / SOL prices as a formatted string |
 | `/trend` | GET | BTC 24h % change, dollar delta, range (high/low) |
-| `/plot` | GET | S3 URL of the BTC/ETH/SOL % change chart (last 48 hours) |
+| `/plot` | GET | S3 URL of the BTC/ETH/SOL 3-panel price chart (last 48 hours) |
 
 ### Example responses
 

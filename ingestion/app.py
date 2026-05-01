@@ -98,12 +98,27 @@ def ingest(event):
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+_COIN_META = {
+    "bitcoin":  {"label": "BTC", "color": "#F7931A"},
+    "ethereum": {"label": "ETH", "color": "#627EEA"},
+    "solana":   {"label": "SOL", "color": "#9945FF"},
+}
+
+_PANEL_W = 1200
+_PANEL_H = 350
+
+
 def _regenerate_plot(table):
     """
-    Query the last 48 hours of BTC, ETH, and SOL prices, render a multi-line
-    chart of percent change since the start of the window via QuickChart,
-    and upload the PNG to S3. Normalizing to % change lets all three coins
-    share a single y-axis despite very different absolute price scales.
+    Render a 3-panel figure (BTC / ETH / SOL stacked vertically) showing each
+    coin's raw USD price over the last 48 hours, then upload the PNG to S3.
+
+    QuickChart only renders one Chart.js chart per request, so we fire one
+    request per coin and stitch the three PNGs vertically with pypng (a
+    pure-Python PNG library — no compiled deps to package). All three panels
+    use the same canvas width and the same set of x-axis labels (intersected
+    across coins), so they line up; only the bottom panel renders the x-axis
+    labels themselves to give a "shared x-axis" look.
     """
     start_time = (datetime.now(timezone.utc) - timedelta(hours=48)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
@@ -122,7 +137,6 @@ def _regenerate_plot(table):
             for item in resp.get("Items", [])
         }
 
-    # Intersect timestamps across all three coins so the series align on x
     common_ts = sorted(
         set.intersection(*(set(s.keys()) for s in coin_series.values()))
     )
@@ -136,85 +150,118 @@ def _regenerate_plot(table):
         for ts in common_ts
     ]
 
-    coin_meta = {
-        "bitcoin":  {"label": "BTC", "color": "#F7931A"},
-        "ethereum": {"label": "ETH", "color": "#627EEA"},
-        "solana":   {"label": "SOL", "color": "#9945FF"},
-    }
-
-    datasets = []
-    for coin in COINS:
+    panel_pngs = []
+    for i, coin in enumerate(COINS):
+        is_bottom = i == len(COINS) - 1
         prices = [coin_series[coin][ts] for ts in common_ts]
-        baseline = prices[0]
-        pct_change = [((p / baseline) - 1) * 100 for p in prices]
-        meta = coin_meta[coin]
-        datasets.append(
-            {
-                "label": meta["label"],
-                "data": pct_change,
-                "borderColor": meta["color"],
-                "backgroundColor": meta["color"],
-                "borderWidth": 2,
-                "fill": False,
-                "pointRadius": 0,
-                "tension": 0.2,
-            }
-        )
+        latest = prices[-1]
+        meta = _COIN_META[coin]
 
-    chart_config = {
-        "type": "line",
-        "data": {"labels": labels, "datasets": datasets},
-        "options": {
-            "title": {
-                "display": True,
-                "text": "BTC / ETH / SOL — % Change Over Last 48 Hours",
-                "fontSize": 16,
-            },
-            "legend": {"position": "top"},
-            "scales": {
-                "xAxes": [
+        chart_config = {
+            "type": "line",
+            "data": {
+                "labels": labels,
+                "datasets": [
                     {
-                        "scaleLabel": {"display": True, "labelString": "Time (UTC)"},
-                        "ticks": {"maxRotation": 45, "minRotation": 45},
-                    }
-                ],
-                "yAxes": [
-                    {
-                        "scaleLabel": {
-                            "display": True,
-                            "labelString": "% change from start of window",
-                        },
+                        "label": meta["label"],
+                        "data": prices,
+                        "borderColor": meta["color"],
+                        "backgroundColor": meta["color"],
+                        "borderWidth": 2,
+                        "fill": False,
+                        "pointRadius": 3,
+                        "pointBackgroundColor": meta["color"],
+                        "tension": 0.2,
                     }
                 ],
             },
-        },
-    }
-
-    body = json.dumps(
-        {
-            "chart": chart_config,
-            "width": 1000,
-            "height": 500,
-            "backgroundColor": "white",
-            "format": "png",
+            "options": {
+                "title": {
+                    "display": True,
+                    "text": f"{meta['label']} — ${latest:,.2f}",
+                    "fontSize": 16,
+                },
+                "legend": {"display": False},
+                "scales": {
+                    "xAxes": [
+                        {
+                            "display": is_bottom,
+                            "scaleLabel": {
+                                "display": is_bottom,
+                                "labelString": "Time (UTC)",
+                            },
+                            "ticks": {"maxRotation": 45, "minRotation": 45},
+                        }
+                    ],
+                    "yAxes": [
+                        {
+                            "scaleLabel": {
+                                "display": True,
+                                "labelString": "Price (USD)",
+                            },
+                        }
+                    ],
+                },
+            },
         }
-    ).encode()
 
-    req = urllib.request.Request(
-        "https://quickchart.io/chart",
-        data=body,
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        png_bytes = resp.read()
+        body = json.dumps(
+            {
+                "chart": chart_config,
+                "width": _PANEL_W,
+                "height": _PANEL_H,
+                "backgroundColor": "white",
+                "format": "png",
+            }
+        ).encode()
+
+        req = urllib.request.Request(
+            "https://quickchart.io/chart",
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            panel_pngs.append(resp.read())
+
+    combined = _stitch_vertical(panel_pngs)
 
     _s3.put_object(
         Bucket=S3_BUCKET,
         Key="latest-btc.png",
-        Body=png_bytes,
+        Body=combined,
         ContentType="image/png",
     )
     app.log.info(
         f"Plot uploaded: https://{S3_BUCKET}.s3.us-east-1.amazonaws.com/latest-btc.png"
     )
+
+
+def _stitch_vertical(png_bytes_list):
+    """Concatenate equal-width PNGs vertically into a single PNG."""
+    import io as _io
+
+    import png
+
+    width = None
+    info = None
+    rows_out = []
+    for b in png_bytes_list:
+        reader = png.Reader(bytes=b)
+        w, _h, rows, inf = reader.read()
+        if width is None:
+            width, info = w, inf
+        elif w != width:
+            raise ValueError(f"PNG width mismatch: {w} vs {width}")
+        for row in rows:
+            rows_out.append(list(row))
+
+    buf = _io.BytesIO()
+    png.Writer(
+        width=width,
+        height=len(rows_out),
+        bitdepth=info["bitdepth"],
+        greyscale=info["greyscale"],
+        alpha=info["alpha"],
+    ).write(buf, rows_out)
+    return buf.getvalue()

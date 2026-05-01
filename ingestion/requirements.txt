@@ -1,4 +1,5 @@
 # Runtime dependencies packaged into the ingestion Lambda.
 # boto3 is provided by the Lambda runtime and excluded automatically by Chalice.
-# Plot rendering is delegated to the QuickChart public API (urllib in stdlib),
-# so no compiled numerical packages need to be bundled.
+# Plot rendering is delegated to the QuickChart public API (urllib in stdlib);
+# pypng is a pure-Python wheel used to stitch the 3 per-coin panels vertically.
+pypng==0.20220715.0
