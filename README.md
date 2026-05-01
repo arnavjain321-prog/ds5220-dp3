@@ -31,7 +31,7 @@ Lambda (arnavwx-ingestion)
         ├──► DynamoDB PutItem  ──► arnavwx-prices
         │         coin (PK)  │  timestamp (SK)  │  price_usd  │  ...
         │
-        └──► matplotlib chart ──► S3 PutObject ──► arnavwx-dp3-plots/latest-btc.png
+        └──► QuickChart API ──► S3 PutObject ──► arnavwx-dp3-plots/latest-btc.png
 ```
 
 | Component | AWS Service | Details |
@@ -41,7 +41,7 @@ Lambda (arnavwx-ingestion)
 | Persistent store | DynamoDB | PK=`coin`, SK=`timestamp` (ISO 8601), PAY_PER_REQUEST |
 | Plot storage | S3 | Public-read bucket, fixed key `latest-btc.png` |
 
-**Plot strategy:** "render on write" — the ingestion Lambda regenerates the chart in memory with `matplotlib` and uploads it to S3 after every collection cycle. The API `/plot` resource returns the stable S3 URL without any compute at read time.
+**Plot strategy:** "render on write" — the ingestion Lambda regenerates the chart by POSTing a Chart.js config to the public [QuickChart API](https://quickchart.io) and uploads the returned PNG to S3 after every collection cycle. The API `/plot` resource returns the stable S3 URL without any compute at read time.
 
 ### Part 2 — Integration API
 
